@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Windskore City</title>
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #f0f0f0;
+            font-family: Arial, sans-serif;
+        }
+        #game-container {
+            text-align: center;
+        }
+        canvas {
+            border: 2px solid #000;
+            background-color: #fff;
+        }
+        #instructions {
+            margin-top: 10px;
+            font-size: 16px;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        <div id="instructions">
+            Kontroller: WASD eller piltangenter för att köra, Mellanslag för broms.<br>
+            Mål: Samla de gula stjärnorna runt staden!
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Spelkonstanter
+        const TILE_SIZE = 40;
+        const MAP_WIDTH = 20;
+        const MAP_HEIGHT = 15;
+        const CAR_SPEED = 2;
+        const CAR_WIDTH = 20;
+        const CAR_HEIGHT = 30;
+
+        // Stadskarta: 0 = väg, 1 = byggnad, 2 = park, 3 = parkeringsplats
+        const map = [
+            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+            [1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,1],
+            [1,0,1,1,1,0,1,1,1,1,1,1,1,0,1,1,1,1,0,1],
+            [1,0,1,2,2,0,0,0,0,0,0,0,0,0,2,2,2,1,0,1],
+            [1,0,1,2,2,0,1,1,1,1,1,1,1,0,2,2,2,1,0,1],
+            [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+            [1,0,1,1,1,1,1,0,1,1,1,1,1,1,1,1,1,1,0,1],
+            [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+            [1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,1,0,1],
+            [1,0,1,3,3,0,0,0,0,0,0,0,0,0,2,2,2,1,0,1],
+            [1,0,1,3,3,0,1,1,1,1,1,1,1,0,2,2,2,1,0,1],
+            [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+            [1,0,1,1,1,1,1,0,1,1,1,1,1,1,1,1,1,1,0,1],
+            [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+        ];
+
+        // Ladda texturer
+        const textures = {};
+        const textureFiles = {
+            road: 'road_texture.png',
+            building: 'building_texture.png',
+            park: 'park_texture.png',
+            parking: 'parking_texture.png',
+            car: 'car_texture.png',
+            npc: 'npc_texture.png'
+        };
+
+        let loadedTextures = 0;
+        const totalTextures = Object.keys(textureFiles).length;
+
+        // Funktion för att ladda en textur
+        function loadTexture(key, url) {
+            const img = new Image();
+            img.src = url;
+            img.onload = () => {
+                textures[key] = img;
+                loadedTextures++;
+                if (loadedTextures === totalTextures) {
+                    gameLoop(); // Starta spelet när alla texturer är laddade
+                }
+            };
+            img.onerror = () => {
+                console.error(`Kunde inte ladda textur: ${url}`);
+                // Fallback till solida färger om texturen inte laddas
+                textures[key] = null;
+                loadedTextures++;
+                if (loadedTextures === totalTextures) {
+                    gameLoop();
+                }
+            };
+        }
+
+        // Ladda alla texturer
+        for (let key in textureFiles) {
+            loadTexture(key, textureFiles[key]);
+        }
+
+        // Spelarbil
+        let car = {
+            x: 40,
+            y: 40,
+            angle: 0,
+            speed: 0,
+            maxSpeed: CAR_SPEED,
+            acceleration: 0.1,
+            deceleration: 0.05,
+            turnSpeed: 3
+        };
+
+        // Tangenttryck
+        const keys = {};
+
+        // Samlingsobjekt (stjärnor)
+        let collectibles = [
+            {x: 100, y: 100, collected: false},
+            {x: 300, y: 200, collected: false},
+            {x: 500, y: 300, collected: false},
+            {x: 700, y: 400, collected: false},
+            {x: 200, y: 500, collected: false}
+        ];
+
+        let score = 0;
+
+        // Enkla NPC-bilar
+        let npcs = [
+            {x: 200, y: 40, angle: 90, speed: 1},
+            {x: 400, y: 40, angle: 90, speed: 1}
+        ];
+
+        // Lyssna på tangenttryck
+        window.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+        });
+
+        window.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+        });
+
+        // Rita kartan med texturer
+        function drawMap() {
+            for (let y = 0; y < MAP_HEIGHT; y++) {
+                for (let x = 0; x < MAP_WIDTH; x++) {
+                    const tile = map[y][x];
+                    let texture;
+                    if (tile === 0) {
+                        texture = textures.road;
+                        ctx.fillStyle = texture ? null : '#808080'; // Fallback till grå
+                    } else if (tile === 1) {
+                        texture = textures.building;
+                        ctx.fillStyle = texture ? null : '#ff0000'; // Fallback till röd
+                    } else if (tile === 2) {
+                        texture = textures.park;
+                        ctx.fillStyle = texture ? null : '#00ff00'; // Fallback till grön
+                    } else if (tile === 3) {
+                        texture = textures.parking;
+                        ctx.fillStyle = texture ? null : '#0000ff'; // Fallback till blå
+                    }
+                    if (texture) {
+                        ctx.drawImage(texture, x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                    } else {
+                        ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                    }
+                }
+            }
+        }
+
+        // Rita bilen med textur
+        function drawCar() {
+            ctx.save();
+            ctx.translate(car.x + CAR_WIDTH / 2, car.y + CAR_HEIGHT / 2);
+            ctx.rotate(car.angle * Math.PI / 180);
+            if (textures.car) {
+                ctx.drawImage(textures.car, -CAR_WIDTH / 2, -CAR_HEIGHT / 2, CAR_WIDTH, CAR_HEIGHT);
+            } else {
+                ctx.fillStyle = '#0000ff'; // Fallback till blå
+                ctx.fillRect(-CAR_WIDTH / 2, -CAR_HEIGHT / 2, CAR_WIDTH, CAR_HEIGHT);
+            }
+            ctx.restore();
+        }
+
+        // Rita NPC:er med textur
+        function drawNPCs() {
+            npcs.forEach(npc => {
+                ctx.save();
+                ctx.translate(npc.x + CAR_WIDTH / 2, npc.y + CAR_HEIGHT / 2);
+                ctx.rotate(npc.angle * Math.PI / 180);
+                if (textures.npc) {
+                    ctx.drawImage(textures.npc, -CAR_WIDTH / 2, -CAR_HEIGHT / 2, CAR_WIDTH, CAR_HEIGHT);
+                } else {
+                    ctx.fillStyle = '#ff00ff'; // Fallback till rosa
+                    ctx.fillRect(-CAR_WIDTH / 2, -CAR_HEIGHT / 2, CAR_WIDTH, CAR_HEIGHT);
+                }
+                ctx.restore();
+            });
+        }
+
+        // Rita samlingsobjekt (stjärnor, oförändrat)
+        function drawCollectibles() {
+            collectibles.forEach(item => {
+                if (!item.collected) {
+                    ctx.fillStyle = '#ffff00'; // Gul stjärna
+                    ctx.beginPath();
+                    ctx.moveTo(item.x + 10, item.y);
+                    ctx.lineTo(item.x + 13, item.y + 7);
+                    ctx.lineTo(item.x + 20, item.y + 7);
+                    ctx.lineTo(item.x + 15, item.y + 12);
+                    ctx.lineTo(item.x + 17, item.y + 20);
+                    ctx.lineTo(item.x + 10, item.y + 15);
+                    ctx.lineTo(item.x + 3, item.y + 20);
+                    ctx.lineTo(item.x + 5, item.y + 12);
+                    ctx.lineTo(item.x, item.y + 7);
+                    ctx.lineTo(item.x + 7, item.y + 7);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+            });
+        }
+
+        // Övriga funktioner (oförändrade)
+        function updateCar() {
+            if (keys['w'] || keys['arrowup']) {
+                car.speed = Math.min(car.speed + car.acceleration, car.maxSpeed);
+            } else {
+                car.speed = Math.max(car.speed - car.deceleration, 0);
+            }
+            if (keys[' ']) {
+                car.speed = Math.max(car.speed - car.deceleration * 2, 0);
+            }
+            if (keys['a'] || keys['arrowleft']) {
+                car.angle -= car.turnSpeed;
+            }
+            if (keys['d'] || keys['arrowright']) {
+                car.angle += car.turnSpeed;
+            }
+            const rad = car.angle * Math.PI / 180;
+            const newX = car.x + car.speed * Math.cos(rad);
+            const newY = car.y + car.speed * Math.sin(rad);
+            if (!isCollision(newX, newY)) {
+                car.x = newX;
+                car.y = newY;
+            } else {
+                car.speed = 0;
+            }
+            car.x = Math.max(0, Math.min(car.x, canvas.width - CAR_WIDTH));
+            car.y = Math.max(0, Math.min(car.y, canvas.height - CAR_HEIGHT));
+        }
+
+        function isCollision(x, y) {
+            const tileX = Math.floor(x / TILE_SIZE);
+            const tileY = Math.floor(y / TILE_SIZE);
+            const tileX2 = Math.floor((x + CAR_WIDTH) / TILE_SIZE);
+            const tileY2 = Math.floor((y + CAR_HEIGHT) / TILE_SIZE);
+            if (tileX < 0 || tileY < 0 || tileX2 >= MAP_WIDTH || tileY2 >= MAP_HEIGHT) {
+                return true;
+            }
+            return map[tileY][tileX] === 1 || map[tileY][tileX2] === 1 ||
+                   map[tileY2][tileX] === 1 || map[tileY2][tileX2] === 1;
+        }
+
+        function updateNPCs() {
+            npcs.forEach(npc => {
+                const rad = npc.angle * Math.PI / 180;
+                npc.y += npc.speed * Math.sin(rad);
+                if (npc.y > canvas.height) {
+                    npc.y = -CAR_HEIGHT;
+                }
+            });
+        }
+
+        function checkCollectibles() {
+            collectibles.forEach(item => {
+                if (!item.collected) {
+                    const dx = car.x - item.x;
+                    const dy = car.y - item.y;
+                    if (Math.sqrt(dx*dx + dy*dy) < 20) {
+                        item.collected = true;
+                        score++;
+                        document.getElementById('instructions').innerText = `Kontroller: WASD eller piltangenter för att köra, Mellanslag för broms.\nMål: Samla de gula stjärnorna runt staden! Poäng: ${score}`;
+                    }
+                }
+            });
+        }
+
+        // Spelloop
+        function gameLoop() {
+            if (loadedTextures < totalTextures) return; // Vänta tills texturer är laddade
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawMap();
+            updateCar();
+            updateNPCs();
+            drawNPCs();
+            drawCollectibles();
+            drawCar();
+            checkCollectibles();
+            requestAnimationFrame(gameLoop);
+        }
+    </script>
+</body>
+</html>
